@@ -39,6 +39,10 @@ from .common import NotifyFormat
 from .common import NOTIFY_FORMATS
 from .common import OverflowMode
 from .common import OVERFLOW_MODES
+from .common import ConfigFormat
+from .common import CONFIG_FORMATS
+
+from .URLBase import URLBase
 from .plugins.NotifyBase import NotifyBase
 
 from .Apprise import Apprise
@@ -51,9 +55,10 @@ logging.getLogger(__name__).addHandler(NullHandler())
 
 __all__ = [
     # Core
-    'Apprise', 'AppriseAsset', 'NotifyBase',
+    'Apprise', 'AppriseAsset', 'AppriseConfig', 'URLBase', 'NotifyBase',
 
     # Reference
     'NotifyType', 'NotifyImageSize', 'NotifyFormat', 'OverflowMode',
     'NOTIFY_TYPES', 'NOTIFY_IMAGE_SIZES', 'NOTIFY_FORMATS', 'OVERFLOW_MODES',
+    'ConfigFormat', 'CONFIG_FORMATS',
 ]

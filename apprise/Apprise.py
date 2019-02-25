@@ -24,13 +24,14 @@
 # THE SOFTWARE.
 
 import re
+import six
 import logging
 from markdown import markdown
 
 from .common import NotifyType
 from .common import NotifyFormat
+from .utils import is_exclusive_match
 from .utils import parse_list
-from .utils import compat_is_basestring
 from .utils import GET_SCHEMA_RE
 
 from .AppriseAsset import AppriseAsset
@@ -40,54 +41,6 @@ from . import plugins
 from . import __version__
 
 logger = logging.getLogger(__name__)
-
-# Build a list of supported plugins
-SCHEMA_MAP = {}
-
-
-# Load our Lookup Matrix
-def __load_matrix():
-    """
-    Dynamically load our schema map; this allows us to gracefully
-    skip over plugins we simply don't have the dependecies for.
-
-    """
-    # to add it's mapping to our hash table
-    for entry in dir(plugins):
-
-        # Get our plugin
-        plugin = getattr(plugins, entry)
-        if not hasattr(plugin, 'app_id'):  # pragma: no branch
-            # Filter out non-notification modules
-            continue
-
-        # Load protocol(s) if defined
-        proto = getattr(plugin, 'protocol', None)
-        if compat_is_basestring(proto):
-            if proto not in SCHEMA_MAP:
-                SCHEMA_MAP[proto] = plugin
-
-        elif isinstance(proto, (set, list, tuple)):
-            # Support iterables list types
-            for p in proto:
-                if p not in SCHEMA_MAP:
-                    SCHEMA_MAP[p] = plugin
-
-        # Load secure protocol(s) if defined
-        protos = getattr(plugin, 'secure_protocol', None)
-        if compat_is_basestring(protos):
-            if protos not in SCHEMA_MAP:
-                SCHEMA_MAP[protos] = plugin
-
-        if isinstance(protos, (set, list, tuple)):
-            # Support iterables list types
-            for p in protos:
-                if p not in SCHEMA_MAP:
-                    SCHEMA_MAP[p] = plugin
-
-
-# Dynamically build our module
-__load_matrix()
 
 
 class Apprise(object):
@@ -112,10 +65,8 @@ class Apprise(object):
         # directory images can be found in. It can also identify remote
         # URL paths that contain the images you want to present to the end
         # user. If no asset is specified, then the default one is used.
-        self.asset = asset
-        if asset is None:
-            # Load our default configuration
-            self.asset = AppriseAsset()
+        self.asset = \
+            asset if isinstance(asset, AppriseAsset) else AppriseAsset()
 
         if servers:
             self.add(servers)
@@ -128,48 +79,45 @@ class Apprise(object):
 
         """
         # swap hash (#) tag values with their html version
-        # This is useful for accepting channels (as arguments to pushbullet)
         _url = url.replace('/#', '/%23')
 
         # Attempt to acquire the schema at the very least to allow our plugins
         # to determine if they can make a better interpretation of a URL
-        # geared for them anyway.
+        # geared for them
         schema = GET_SCHEMA_RE.match(_url)
         if schema is None:
-            logger.error('%s is an unparseable server url.' % url)
+            logger.error('Unparseable schema:// found in URL {}.'.format(url))
             return None
 
-        # Update the schema
+        # Ensure our schema is always in lower case
         schema = schema.group('schema').lower()
 
         # Some basic validation
-        if schema not in SCHEMA_MAP:
-            logger.error(
-                '{0} is not a supported server type (url={1}).'.format(
-                    schema,
-                    _url,
-                )
-            )
+        if schema not in plugins.SCHEMA_MAP:
+            logger.error('Unsupported schema {}.'.format(schema))
             return None
 
-        # Parse our url details
-        # the server object is a dictionary containing all of the information
-        # parsed from our URL
-        results = SCHEMA_MAP[schema].parse_url(_url)
+        # Parse our url details of the server object as dictionary containing
+        # all of the information parsed from our URL
+        results = plugins.SCHEMA_MAP[schema].parse_url(_url)
 
         if not results:
             # Failed to parse the server URL
-            logger.error('Could not parse URL: %s' % url)
+            logger.error('Unparseable URL {}.'.format(url))
             return None
 
         # Build a list of tags to associate with the newly added notifications
         results['tag'] = set(parse_list(tag))
 
+        # Prepare our Asset Object
+        results['asset'] = \
+            asset if isinstance(asset, AppriseAsset) else AppriseAsset()
+
         if suppress_exceptions:
             try:
                 # Attempt to create an instance of our plugin using the parsed
                 # URL information
-                plugin = SCHEMA_MAP[results['schema']](**results)
+                plugin = plugins.SCHEMA_MAP[results['schema']](**results)
 
             except Exception:
                 # the arguments are invalid or can not be used.
@@ -179,11 +127,7 @@ class Apprise(object):
         else:
             # Attempt to create an instance of our plugin using the parsed
             # URL information but don't wrap it in a try catch
-            plugin = SCHEMA_MAP[results['schema']](**results)
-
-        # Save our asset
-        if asset:
-            plugin.asset = asset
+            plugin = plugins.SCHEMA_MAP[results['schema']](**results)
 
         return plugin
 
@@ -202,7 +146,7 @@ class Apprise(object):
         # Initialize our return status
         return_status = True
 
-        if asset is None:
+        if isinstance(asset, AppriseAsset):
             # prepare default asset
             asset = self.asset
 
@@ -275,46 +219,9 @@ class Apprise(object):
         # Iterate over our loaded plugins
         for server in self.servers:
 
-            if tag is not None:
-
-                if isinstance(tag, (list, tuple, set)):
-                    # using the tags detected; determine if we'll allow the
-                    # notification to be sent or not
-                    matched = False
-
-                    # Every entry here will be or'ed with the next
-                    for entry in tag:
-                        if isinstance(entry, (list, tuple, set)):
-
-                            # treat these entries as though all elements found
-                            # must exist in the notification service
-                            tags = set(parse_list(entry))
-
-                            if len(tags.intersection(
-                                   server.tags)) == len(tags):
-                                # our set contains all of the entries found
-                                # in our notification server object
-                                matched = True
-                                break
-
-                        elif entry in server:
-                            # our entr(ies) match what was found in our server
-                            # object.
-                            matched = True
-                            break
-
-                        # else: keep looking
-
-                    if not matched:
-                        # We did not meet any of our and'ed criteria
-                        continue
-
-                elif tag not in server:
-                    # one or more tags were defined and they didn't match the
-                    # entry in the current service; move along...
-                    continue
-
-                # else: our content was found inside the server, so we're good
+            # Apply our tag matching based on our defined logic
+            if tag is not None and not is_exclusive_match(tag, server.tags):
+                continue
 
             # If our code reaches here, we either did not define a tag (it was
             # set to None), or we did define a tag and the logic above
@@ -412,12 +319,12 @@ class Apprise(object):
 
             # Standard protocol(s) should be None or a tuple
             protocols = getattr(plugin, 'protocol', None)
-            if compat_is_basestring(protocols):
+            if isinstance(protocols, six.string_types):
                 protocols = (protocols, )
 
             # Secure protocol(s) should be None or a tuple
             secure_protocols = getattr(plugin, 'secure_protocol', None)
-            if compat_is_basestring(secure_protocols):
+            if isinstance(secure_protocols, six.string_types):
                 secure_protocols = (secure_protocols, )
 
             # Build our response object

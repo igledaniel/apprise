@@ -23,22 +23,25 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
-from apprise import plugins
-from apprise import NotifyType
-from apprise import NotifyBase
-from apprise import Apprise
-from apprise import AppriseAsset
-from apprise.utils import compat_is_basestring
-from apprise.common import NotifyFormat
-from apprise.common import OverflowMode
-
+import six
+import requests
+import mock
 from json import dumps
 from random import choice
 from string import ascii_uppercase as str_alpha
 from string import digits as str_num
 
-import requests
-import mock
+from apprise import plugins
+from apprise import NotifyType
+from apprise import NotifyBase
+from apprise import Apprise
+from apprise import AppriseAsset
+from apprise.common import NotifyFormat
+from apprise.common import OverflowMode
+
+# Disable logging for a cleaner testing output
+import logging
+logging.disable(logging.CRITICAL)
 
 # Some exception handling we'll use
 REQUEST_EXCEPTIONS = (
@@ -338,6 +341,7 @@ TEST_URLS = (
     # APIKey + bad device
     ('join://%s/%s' % ('a' * 32, 'd' * 10), {
         'instance': plugins.NotifyJoin,
+        'response': False,
     }),
     # APIKey + bad url
     ('join://:@/', {
@@ -1129,6 +1133,9 @@ TEST_URLS = (
         # No username specified; this is still okay as we sub in
         # default; The one invalid channel is skipped when sending a message
         'instance': plugins.NotifySlack,
+        # There is an invalid channel that we will fail to deliver to
+        # as a result the response type will be false
+        'response': False,
     }),
     ('slack://T1JJ3T3L2/A1BRTD4JD/TIiajkdnlazkcOXrIdevi7FQ/#channel', {
         # No username specified; this is still okay as we sub in
@@ -1524,7 +1531,7 @@ def test_rest_plugins(mock_post, mock_get):
         # Allow us to force the server response text to be something other then
         # the defaults
         requests_response_text = meta.get('requests_response_text')
-        if not compat_is_basestring(requests_response_text):
+        if not isinstance(requests_response_text, six.string_types):
             # Convert to string
             requests_response_text = dumps(requests_response_text)
 
@@ -1547,11 +1554,7 @@ def test_rest_plugins(mock_post, mock_get):
 
         # A request
         robj = mock.Mock()
-        setattr(robj, 'raw', mock.Mock())
-        # Allow raw.read() calls
-        robj.raw.read.return_value = ''
-        robj.text = ''
-        robj.content = ''
+        robj.content = u''
         mock_get.return_value = robj
         mock_post.return_value = robj
 
@@ -1561,8 +1564,8 @@ def test_rest_plugins(mock_post, mock_get):
             mock_get.return_value.status_code = requests_response_code
 
             # Handle our default text response
-            mock_get.return_value.text = requests_response_text
-            mock_post.return_value.text = requests_response_text
+            mock_get.return_value.content = requests_response_text
+            mock_post.return_value.content = requests_response_text
 
             # Ensure there is no side effect set
             mock_post.side_effect = None
@@ -1592,7 +1595,7 @@ def test_rest_plugins(mock_post, mock_get):
 
             if isinstance(obj, plugins.NotifyBase.NotifyBase):
                 # We loaded okay; now lets make sure we can reverse this url
-                assert(compat_is_basestring(obj.url()) is True)
+                assert(isinstance(obj.url(), six.string_types) is True)
 
                 # Instantiate the exact same object again using the URL from
                 # the one that was already created properly
@@ -1666,12 +1669,16 @@ def test_rest_plugins(mock_post, mock_get):
 
             except AssertionError:
                 # Don't mess with these entries
-                print('%s AssertionError' % url)
                 raise
 
             except Exception as e:
                 # Check that we were expecting this exception to happen
-                if not isinstance(e, response):
+                try:
+                    if not isinstance(e, response):
+                        raise
+
+                except TypeError:
+                    print('%s Unhandled response %s' % (url, type(e)))
                     raise
 
             #
@@ -1901,9 +1908,7 @@ def test_notify_emby_plugin_login(mock_post, mock_get):
 
     # Our login flat out fails if we don't have proper parseable content
     mock_post.return_value.content = u''
-    mock_post.return_value.text = ''
     mock_get.return_value.content = mock_post.return_value.content
-    mock_get.return_value.text = mock_post.return_value.text
 
     # KeyError handling
     mock_post.return_value.status_code = 999
@@ -1944,9 +1949,7 @@ def test_notify_emby_plugin_login(mock_post, mock_get):
     mock_post.return_value.content = dumps({
         u'AccessToken': u'0000-0000-0000-0000',
     })
-    mock_post.return_value.text = str(mock_post.return_value.content)
     mock_get.return_value.content = mock_post.return_value.content
-    mock_get.return_value.text = mock_post.return_value.text
 
     obj = Apprise.instantiate('emby://l2g:l2gpass@localhost')
     assert isinstance(obj, plugins.NotifyEmby)
@@ -1964,9 +1967,7 @@ def test_notify_emby_plugin_login(mock_post, mock_get):
         u'Id': u'123abc',
         u'AccessToken': u'0000-0000-0000-0000',
     })
-    mock_post.return_value.text = str(mock_post.return_value.content)
     mock_get.return_value.content = mock_post.return_value.content
-    mock_get.return_value.text = mock_post.return_value.text
 
     obj = Apprise.instantiate('emby://l2g:l2gpass@localhost')
     assert isinstance(obj, plugins.NotifyEmby)
@@ -1985,9 +1986,7 @@ def test_notify_emby_plugin_login(mock_post, mock_get):
         },
         u'AccessToken': u'0000-0000-0000-0000',
     })
-    mock_post.return_value.text = str(mock_post.return_value.content)
     mock_get.return_value.content = mock_post.return_value.content
-    mock_get.return_value.text = mock_post.return_value.text
 
     # Login
     assert obj.login() is True
@@ -2036,9 +2035,7 @@ def test_notify_emby_plugin_sessions(mock_post, mock_get, mock_logout,
 
     # Our login flat out fails if we don't have proper parseable content
     mock_post.return_value.content = u''
-    mock_post.return_value.text = ''
     mock_get.return_value.content = mock_post.return_value.content
-    mock_get.return_value.text = mock_post.return_value.text
 
     # KeyError handling
     mock_post.return_value.status_code = 999
@@ -2056,9 +2053,7 @@ def test_notify_emby_plugin_sessions(mock_post, mock_get, mock_logout,
 
     mock_post.return_value.status_code = requests.codes.ok
     mock_get.return_value.status_code = requests.codes.ok
-    mock_post.return_value.text = str(mock_post.return_value.content)
     mock_get.return_value.content = mock_post.return_value.content
-    mock_get.return_value.text = mock_post.return_value.text
 
     # Disable the port completely
     obj.port = None
@@ -2079,9 +2074,7 @@ def test_notify_emby_plugin_sessions(mock_post, mock_get, mock_logout,
             u'InvalidEntry': None,
         },
     ])
-    mock_post.return_value.text = str(mock_post.return_value.content)
     mock_get.return_value.content = mock_post.return_value.content
-    mock_get.return_value.text = mock_post.return_value.text
 
     sessions = obj.sessions(user_controlled=True)
     assert isinstance(sessions, dict) is True
@@ -2138,9 +2131,7 @@ def test_notify_emby_plugin_logout(mock_post, mock_get, mock_login):
 
     # Our login flat out fails if we don't have proper parseable content
     mock_post.return_value.content = u''
-    mock_post.return_value.text = ''
     mock_get.return_value.content = mock_post.return_value.content
-    mock_get.return_value.text = mock_post.return_value.text
 
     # KeyError handling
     mock_post.return_value.status_code = 999
@@ -2158,9 +2149,7 @@ def test_notify_emby_plugin_logout(mock_post, mock_get, mock_login):
 
     mock_post.return_value.status_code = requests.codes.ok
     mock_get.return_value.status_code = requests.codes.ok
-    mock_post.return_value.text = str(mock_post.return_value.content)
     mock_get.return_value.content = mock_post.return_value.content
-    mock_get.return_value.text = mock_post.return_value.text
 
     # Disable the port completely
     obj.port = None
@@ -2181,11 +2170,11 @@ def test_notify_emby_plugin_notify(mock_post, mock_get, mock_logout,
     # Disable Throttling to speed testing
     plugins.NotifyBase.NotifyBase.request_rate_per_sec = 0
 
-    # Prepare Mock
-    mock_get.return_value = requests.Request()
-    mock_post.return_value = requests.Request()
-    mock_post.return_value.status_code = requests.codes.ok
-    mock_get.return_value.status_code = requests.codes.ok
+    req = requests.Request()
+    req.status_code = requests.codes.ok
+    req.content = ''
+    mock_get.return_value = req
+    mock_post.return_value = req
 
     # This is done so we don't obstruct our access_token and user_id values
     mock_login.return_value = True
@@ -2218,9 +2207,7 @@ def test_notify_emby_plugin_notify(mock_post, mock_get, mock_logout,
 
     # Our login flat out fails if we don't have proper parseable content
     mock_post.return_value.content = u''
-    mock_post.return_value.text = ''
     mock_get.return_value.content = mock_post.return_value.content
-    mock_get.return_value.text = mock_post.return_value.text
 
     # KeyError handling
     mock_post.return_value.status_code = 999
@@ -2234,9 +2221,7 @@ def test_notify_emby_plugin_notify(mock_post, mock_get, mock_logout,
 
     mock_post.return_value.status_code = requests.codes.ok
     mock_get.return_value.status_code = requests.codes.ok
-    mock_post.return_value.text = str(mock_post.return_value.content)
     mock_get.return_value.content = mock_post.return_value.content
-    mock_get.return_value.text = mock_post.return_value.text
 
     # Disable the port completely
     obj.port = None
@@ -2356,10 +2341,11 @@ def test_notify_join_plugin(mock_post, mock_get):
     p = plugins.NotifyJoin(apikey=apikey, devices=[group, device])
 
     # Prepare our mock responses
-    mock_get.return_value = requests.Request()
-    mock_post.return_value = requests.Request()
-    mock_post.return_value.status_code = requests.codes.created
-    mock_get.return_value.status_code = requests.codes.created
+    req = requests.Request()
+    req.status_code = requests.codes.created
+    req.content = ''
+    mock_get.return_value = req
+    mock_post.return_value = req
 
     # Test notifications without a body or a title; nothing to send
     # so we return False
@@ -2482,8 +2468,6 @@ def test_notify_pushed_plugin(mock_post, mock_get):
     mock_post.return_value = requests.Request()
     mock_post.return_value.status_code = requests.codes.ok
     mock_get.return_value.status_code = requests.codes.ok
-    mock_post.return_value.text = ''
-    mock_get.return_value.text = ''
 
     try:
         obj = plugins.NotifyPushed(
@@ -2556,8 +2540,6 @@ def test_notify_pushed_plugin(mock_post, mock_get):
     # Prepare Mock to fail
     mock_post.return_value.status_code = requests.codes.internal_server_error
     mock_get.return_value.status_code = requests.codes.internal_server_error
-    mock_post.return_value.text = ''
-    mock_get.return_value.text = ''
 
 
 @mock.patch('requests.get')
@@ -2646,8 +2628,8 @@ def test_notify_rocketchat_plugin(mock_post, mock_get):
     mock_post.return_value = requests.Request()
     mock_post.return_value.status_code = requests.codes.ok
     mock_get.return_value.status_code = requests.codes.ok
-    mock_post.return_value.text = ''
-    mock_get.return_value.text = ''
+    mock_post.return_value.content = ''
+    mock_get.return_value.content = ''
 
     try:
         obj = plugins.NotifyRocketChat(
@@ -2701,8 +2683,6 @@ def test_notify_rocketchat_plugin(mock_post, mock_get):
     # Prepare Mock to fail
     mock_post.return_value.status_code = requests.codes.internal_server_error
     mock_get.return_value.status_code = requests.codes.internal_server_error
-    mock_post.return_value.text = ''
-    mock_get.return_value.text = ''
 
     #
     # Send Notification
@@ -2732,13 +2712,10 @@ def test_notify_rocketchat_plugin(mock_post, mock_get):
     #
     assert obj.logout() is False
 
-    mock_post.return_value.text = ''
     # Generate exceptions
     mock_get.side_effect = requests.ConnectionError(
         0, 'requests.ConnectionError() not handled')
     mock_post.side_effect = mock_get.side_effect
-    mock_get.return_value.text = ''
-    mock_post.return_value.text = ''
 
     #
     # Send Notification
@@ -2824,7 +2801,7 @@ def test_notify_telegram_plugin(mock_post, mock_get):
     assert(len(obj.chat_ids) == 2)
 
     # test url call
-    assert(compat_is_basestring(obj.url()))
+    assert(isinstance(obj.url(), six.string_types))
     # Test that we can load the string we generate back:
     obj = plugins.NotifyTelegram(**plugins.NotifyTelegram.parse_url(obj.url()))
     assert(isinstance(obj, plugins.NotifyTelegram))
@@ -2839,7 +2816,7 @@ def test_notify_telegram_plugin(mock_post, mock_get):
     response.status_code = requests.codes.internal_server_error
 
     # a error response
-    response.text = dumps({
+    response.content = dumps({
         'description': 'test',
     })
     mock_get.return_value = response

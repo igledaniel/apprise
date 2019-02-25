@@ -34,6 +34,10 @@ except ImportError:
 
 from apprise import utils
 
+# Disable logging for a cleaner testing output
+import logging
+logging.disable(logging.CRITICAL)
+
 
 def test_parse_qsd():
     "utils: parse_qsd() testing """
@@ -385,6 +389,18 @@ def test_is_hostname():
     assert utils.is_hostname('    spaces   ') is False
     assert utils.is_hostname('       ') is False
     assert utils.is_hostname('') is False
+
+
+def test_is_email():
+    """
+    API: is_email() function
+
+    """
+    # Valid Emails
+    assert utils.is_email('test@gmail.com') is True
+
+    # Invalid Emails
+    assert utils.is_email('invalid.com') is False
 
 
 def test_parse_list():

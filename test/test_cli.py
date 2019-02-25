@@ -27,7 +27,11 @@ from __future__ import print_function
 from apprise import cli
 from apprise import NotifyBase
 from click.testing import CliRunner
-from apprise.Apprise import SCHEMA_MAP
+from apprise.plugins import SCHEMA_MAP
+
+# Disable logging for a cleaner testing output
+import logging
+logging.disable(logging.CRITICAL)
 
 
 def test_apprise_cli():
